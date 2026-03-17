@@ -1,0 +1,12 @@
+# This tells Grafana: "look in /var/lib/grafana/dashboards for JSON dashboard files"
+apiVersion: 1
+
+providers:
+  - name: 'Video Transcoding'
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

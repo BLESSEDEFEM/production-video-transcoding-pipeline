@@ -1,0 +1,13 @@
+# This file is read by Grafana on startup.
+# It automatically adds Prometheus as a data source.
+# Without this, you'd have to click through Grafana UI every time.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090   # Prometheus container name + port
+    isDefault: true                # Use this as the default data source
+    editable: true

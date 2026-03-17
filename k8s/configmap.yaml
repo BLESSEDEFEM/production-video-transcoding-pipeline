@@ -1,0 +1,16 @@
+# configmap.yaml
+# ConfigMap stores non-sensitive configuration.
+# Think of it as environment variables that all our pods can read.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: video-app
+data:
+  # These are the same values as in docker-compose.yml environment: section
+  # but here postgres/redis/minio refer to Kubernetes Service names
+  POSTGRES_DB: "video_transcoding"
+  REDIS_URL: "redis://redis-service:6379/0"
+  MINIO_ENDPOINT: "minio-service:9000"
+  MINIO_BUCKET: "videos"
+  NUM_CHUNKS: "4"

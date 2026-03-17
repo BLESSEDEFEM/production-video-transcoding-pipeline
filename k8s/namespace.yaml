@@ -1,0 +1,9 @@
+# namespace.yaml
+# A namespace is like a folder for all your app's Kubernetes objects.
+# Everything we create (pods, services, etc.) will be in "video-app".
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: video-app
+  labels:
+    app: video-transcoding

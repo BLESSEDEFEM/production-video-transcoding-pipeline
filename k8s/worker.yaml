@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transcoding-worker
+  namespace: video-app
+spec:
+  replicas: 4           # ← THIS IS THE MAGIC NUMBER
+  # Change this to scale up or down:
+  # replicas: 1  = 1 worker  (light load)
+  # replicas: 4  = 4 workers (standard)
+  # replicas: 8  = 8 workers (heavy load / many uploads)
+  selector:
+    matchLabels:
+      app: transcoding-worker
+  template:
+    metadata:
+      labels:
+        app: transcoding-worker
+    spec:
+      containers:
+        - name: worker
+          image: video-worker:latest
+          imagePullPolicy: Never
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://postgres:$(POSTGRES_PASSWORD)@postgres-service:5432/video_transcoding"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: POSTGRES_PASSWORD
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: REDIS_URL
+            - name: MINIO_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: MINIO_ENDPOINT
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: MINIO_SECRET_KEY
+            - name: MINIO_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: MINIO_BUCKET
+          resources:
+            limits:
+              cpu: "2000m"    # 2 CPU cores (FFmpeg is CPU-heavy)
+              memory: "2Gi"   # 2GB RAM (video processing needs memory)
+            requests:
+              cpu: "500m"
+              memory: "512Mi"

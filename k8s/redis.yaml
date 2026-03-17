@@ -1,0 +1,49 @@
+# redis.yaml
+# Two resources in one file (separated by ---)
+# Resource 1: Deployment (run and manage Redis pods)
+# Resource 2: Service (give Redis a stable network address)
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: video-app
+spec:
+  replicas: 1         # Run exactly 1 Redis pod
+  selector:
+    matchLabels:
+      app: redis      # This deployment manages pods with label app=redis
+  template:
+    metadata:
+      labels:
+        app: redis    # Label applied to every pod this deployment creates
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command: ["redis-server", "--appendonly", "yes"]
+          ports:
+            - containerPort: 6379
+          resources:
+            # Resource limits: max CPU and memory this pod can use
+            # Prevents one pod from consuming all resources
+            limits:
+              cpu: "500m"       # 500 millicores = 0.5 CPU core
+              memory: "256Mi"   # 256 megabytes
+            requests:
+              cpu: "100m"       # Guaranteed minimum: 0.1 CPU
+              memory: "128Mi"   # Guaranteed minimum: 128 MB
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service    # ← pods connect to Redis using "redis-service" as hostname
+  namespace: video-app
+spec:
+  selector:
+    app: redis           # Route traffic to pods with label app=redis
+  ports:
+    - port: 6379         # Service port
+      targetPort: 6379   # Pod port

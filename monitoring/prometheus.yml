@@ -1,0 +1,27 @@
+# prometheus.yml — Prometheus configuration
+# This file tells Prometheus:
+# 1. How often to scrape
+# 2. WHAT to scrape (which URLs)
+
+global:
+  scrape_interval: 15s      # Default: scrape every 15 seconds
+  evaluation_interval: 15s  # Evaluate rules every 15 seconds
+
+# ─────────────────────────────────────────────────────────────────
+# SCRAPE CONFIGS
+# Each "job" = one target Prometheus will visit to get metrics
+# ─────────────────────────────────────────────────────────────────
+scrape_configs:
+
+  # Scrape Prometheus itself (meta-monitoring)
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Scrape our FastAPI backend
+  - job_name: 'video-backend'
+    static_configs:
+      # 'backend' = the Docker service name from docker-compose.yml
+      # Prometheus can reach it inside Docker network by that name
+      - targets: ['backend:8000']
+    metrics_path: '/metrics'   # The endpoint we created in Step 3

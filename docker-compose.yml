@@ -1,0 +1,323 @@
+# docker-compose.yml
+# This file defines ALL services the application needs.
+# Run everything with: docker-compose up -d
+
+# ─────────────────────────────────────────────────────────────────
+# NETWORKS
+# ─────────────────────────────────────────────────────────────────
+# All services share the same internal network.
+# This lets them talk to each other by NAME instead of IP address.
+# Example: backend can reach postgres by typing "postgres" as hostname.
+networks:
+  app-network:
+    driver: bridge
+
+# ─────────────────────────────────────────────────────────────────
+# VOLUMES
+# ─────────────────────────────────────────────────────────────────
+# Volumes = persistent storage that SURVIVES container restarts.
+# Without volumes, all data is lost when container stops.
+# With volumes, PostgreSQL data and MinIO files stay even after restart.
+volumes:
+  postgres-data:    # PostgreSQL database files
+  minio-data:       # MinIO uploaded video files
+  redis-data:       # Redis queue data
+  prometheus-data:  
+  grafana-data: 
+
+# ─────────────────────────────────────────────────────────────────
+# SERVICES
+# ─────────────────────────────────────────────────────────────────
+services:
+
+  # ── POSTGRESQL DATABASE ──────────────────────────────────────
+  postgres:
+    image: postgres:15              # Use official Postgres 15 image
+    container_name: video-postgres
+    environment:
+      POSTGRES_DB: video_transcoding
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Mich123nBlessed
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"             # host:container (access from your laptop too)
+    networks:
+      - app-network
+    healthcheck:
+      # Docker will check if postgres is ready before starting backend
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── REDIS QUEUE ───────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine         # Official Redis 7 (alpine = small)
+    container_name: video-redis
+    command: redis-server --appendonly yes
+    # appendonly yes = save queue data to disk (survives restarts)
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── MINIO STORAGE ─────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: video-minio
+    command: server /data --console-address ":9001"
+    # /data = where MinIO stores files inside container
+    # console-address :9001 = web UI on port 9001
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"     # API port
+      - "9001:9001"     # Web UI port
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── FASTAPI BACKEND ───────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend          # Build from backend/ folder
+      dockerfile: Dockerfile      # Using backend/Dockerfile
+    container_name: video-backend
+    image: video-backend:latest
+    environment:
+      # These override what's in .env file
+      DATABASE_URL: postgresql://postgres:Mich123nBlessed@postgres:5432/video_transcoding
+      #                                                  ↑ "postgres" = container name
+      REDIS_URL: redis://redis:6379/0
+      #                   ↑ "redis" = container name
+      MINIO_ENDPOINT: minio:9000
+      #                ↑ "minio" = container name
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: videos
+      SECRET_KEY: your-secret-key-change-this
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      ALGORITHM: HS256
+    volumes:
+      - ./backend/temp_transcoding:/app/temp_transcoding
+      - ./backend/temp_chunks:/app/temp_chunks
+      # ↑ mount local folders so temp files are accessible from laptop
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+    depends_on:
+      postgres:
+        condition: service_healthy    # Wait for postgres to be ready
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
+  # ── TRANSCODING WORKER ────────────────────────────────────────
+  # This is the same code as backend but starts the RQ worker instead
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker   # Different Dockerfile!
+    container_name: video-worker-1
+    image: video-worker:latest
+    environment:
+      DATABASE_URL: postgresql://postgres:Mich123nBlessed@postgres:5432/video_transcoding
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: videos
+    volumes:
+      - ./backend/temp_transcoding:/app/temp_transcoding
+      - ./backend/temp_chunks:/app/temp_chunks
+    networks:
+      - app-network
+    depends_on:
+      - redis
+      - postgres
+
+  # ── NEXT.JS FRONTEND ──────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: video-frontend
+    environment:
+      # Frontend needs to know where the backend is
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      # NEXT_PUBLIC_ prefix = available in browser JavaScript
+    ports:
+      - "3000:3000"
+    networks:
+      - app-network
+    depends_on:
+      - backend
+
+  # ── PROMETHEUS (metrics collector) ────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: video-prometheus
+    volumes:
+      # Mount our config file into the container
+      # Left side: our file on laptop
+      # Right side: where Prometheus expects its config inside container
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus   # persistent storage for metrics history
+    ports:
+      - "9090:9090"   # Prometheus web UI at http://localhost:9090
+    networks:
+      - app-network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'  # Keep 30 days of metrics history
+    depends_on:
+      - backend
+
+  # ── GRAFANA (metrics dashboard) ───────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: video-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin        # Login: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123  # Password: admin123 (change later!)
+      GF_USERS_ALLOW_SIGN_UP: "false"       # Only admin can use Grafana
+    volumes:
+      - grafana-data:/var/lib/grafana   # Persistent storage (dashboards, settings)
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      # ↑ Auto-configure data source and dashboards (explained below)
+    ports:
+      - "3001:3000"   # Grafana at http://localhost:3001
+      # (using 3001 because our frontend already uses 3000)
+    networks:
+      - app-network
+    depends_on:
+      - prometheus
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# services:
+#   postgres:
+#     image: postgres:15
+#     container_name: video-transcoding-postgres
+#     environment:
+#       POSTGRES_USER: postgres
+#       POSTGRES_PASSWORD: Mich123nBlessed
+#       POSTGRES_DB: video_transcoding
+#     ports:
+#       - "5432:5432"
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#     healthcheck:
+#       test: ["CMD-SHELL", "pg_isready -U postgres"]
+#       interval: 10s
+#       timeout: 5s
+#       retries: 5
+
+#   redis:
+#     image: redis:7-alpine
+#     container_name: video-transcoding-redis
+#     ports:
+#       - "6379:6379"
+#     volumes:
+#       - redis_data:/data
+#     command: redis-server --appendonly yes
+#     healthcheck:
+#       test: ["CMD", "redis-cli", "ping"]
+#       interval: 10s
+#       timeout: 5s
+#       retries: 5
+
+#   minio:
+#     image: minio/minio:latest
+#     container_name: video-transcoding-minio
+#     environment:
+#       MINIO_ROOT_USER: minioadmin
+#       MINIO_ROOT_PASSWORD: minioadmin
+#     ports:
+#       - "9000:9000"
+#       - "9001:9001"
+#     volumes:
+#       - minio_data:/data
+#     command: server /data --console-address ":9001"
+#     healthcheck:
+#       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+#       interval: 10s
+#       timeout: 5s
+#       retries: 5
+
+#   worker:
+#     build:
+#       context: ./backend
+#       dockerfile: Dockerfile
+#     container_name: video-transcoding-worker
+#     command: python start_worker.py
+#     env_file:
+#       - ./backend/.env
+#     environment:
+#       - DATABASE_URL=postgresql://postgres:Mich123nBlessed@postgres:5432/video_transcoding
+#       - REDIS_URL=redis://redis:6379/0
+#       - MINIO_ENDPOINT=minio:9000
+#     depends_on:
+#       postgres:
+#         condition: service_healthy
+#       redis:
+#         condition: service_healthy
+#       minio:
+#         condition: service_healthy
+#     volumes:
+#       - ./backend:/app
+
+# volumes:
+#   postgres_data:
+#   redis_data:
+#   minio_data:
