@@ -1,0 +1,42 @@
+# from sqlalchemy import Column, Integer, String, DateTime, Float, Text, Boolean, ForeignKey, JSON
+# from sqlalchemy.orm import relationship
+# from datetime import datetime
+# from app.database import Base
+
+# class InspectionReport(Base):
+#     __tablename__ = "inspection_report"
+    
+#     id = Column(Integer, primary_key=True, index=True)
+#     video_id = Column(Integer, ForeignKey("videos.id"), unique=True, nullable=False)
+    
+#     # Source validation result
+#     has_corruption = Column(Boolean, default=False)
+#     bitstream_valid = Column(Boolean, default=True)
+    
+#     # Frame analysis
+#     total_frames = Column(Integer, default=0)
+#     black_frames_count = Column(Integer, default=0)
+#     black_frame_percent = Column(Float, default=0.0)
+#     frozen_frame_count = Column(Integer, default=0)
+#     frozen_frame_percent = Column(Float, default=0.0)
+    
+#     # Quality metrics
+#     psnr = Column(Float)
+#     ssim = Column(Float)
+    
+#     # Resolution validation
+#     meets_min_resolution = Column(Boolean, default=True)
+#     Detected_resolution = Column(String)
+    
+#     # Detailed issues (JSON array of issues found)
+#     issue = Column(JSON) # [{"type": "black_frame", "frame_number": 123} ...]
+    
+#     # Overall result
+#     passed = Column(Boolean, default=False)
+#     rejection_reason = Column(Text)
+    
+#     # Timestamps
+#     inspected_at = Column(DateTime, default=datetime.utcnow)
+    
+#     # Relationship
+#     video = relationship("Video", back_populates="inspection_report")

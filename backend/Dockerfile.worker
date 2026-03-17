@@ -1,0 +1,27 @@
+# Same base setup as the API
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libpq-dev \
+    gcc \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+RUN mkdir -p temp_transcoding temp_chunks storage/uploads storage/signatures
+
+# ─────────────────────────────────────────────────────────────────
+# DIFFERENT START COMMAND: RQ worker instead of uvicorn
+# ─────────────────────────────────────────────────────────────────
+# rq worker = starts a Redis Queue worker process
+# It connects to Redis, picks up jobs from the "transcoding" queue,
+# and runs them one by one.
+# "transcoding" = the queue name we used in transcoding_queue.py
+CMD ["rq", "worker", "transcoding", "--url", "redis://redis:6379/0"]
