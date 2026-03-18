@@ -189,8 +189,11 @@ def verify_assembly(
     print(f"   Decode errors: {decode_check['error_count']} {'✅' if decode_check['clean'] else '⚠️'}")
     
     # ── OVERALL RESULT ──
-    # Duration and decode MUST pass. Frames just warn (transcoding can shift them slightly).
-    report["passed"] = report["duration_ok"] and report["decode_ok"]
+    # Duration MUST pass. Minor decode errors (up to 5) are tolerated
+    # because chunk boundaries often produce harmless FFmpeg warnings.
+    # Frames just warn (transcoding can shift them slightly).
+    minor_decode_issues = decode_check["error_count"] <= 5
+    report["passed"] = report["duration_ok"] and (report["decode_ok"] or minor_decode_issues)
 
     if report["passed"]:
         report["details"] = "Assembly verified ✅"

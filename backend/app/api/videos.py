@@ -100,10 +100,38 @@ async def inspect_video_task(video_id: int, temp_path: str, db: Session):
                 print(f"   ✅ Queued {quality}: Job {job_id}")
                 
             print(f"   Total: {len(qualities)} jobs queued\n")
+            
+            # Send email notification: video approved
+            try:
+                user = db.query(User).filter(User.id == video.user_id).first()
+                if user:
+                    from app.services.email_service import notify_upload_approved
+                    notify_upload_approved(
+                        to_email=user.email,
+                        filename=video.filename,
+                        video_id=video_id,
+                        resolution=resolution,
+                        qualities=qualities
+                    )
+            except Exception as e:
+                print(f"⚠️  Email notification failed (non-fatal): {e}")
         else:
             video.status = VideoStatus.REJECTED
             video.inspection_passed = False
             video.rejection_reason = validation_result.get('summary', 'Validation failed')
+            
+            # Send email notification: video rejected
+            try:
+                user = db.query(User).filter(User.id == video.user_id).first()
+                if user:
+                    from app.services.email_service import notify_upload_rejected
+                    notify_upload_rejected(
+                        to_email=user.email,
+                        filename=video.filename,
+                        reason=video.rejection_reason
+                    )
+            except Exception as e:
+                print(f"⚠️  Email notification failed (non-fatal): {e}")
          
         db.commit()
         

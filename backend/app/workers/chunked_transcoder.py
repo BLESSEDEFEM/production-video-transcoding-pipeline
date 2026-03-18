@@ -17,13 +17,15 @@ from app.database import SessionLocal
 from app.models.video import Video, VideoStatus
 from app.models.transcoding_job import TranscodingJob
 from app.models.transcoded_video import TranscodedVideo
+from app.models.user import User
 from app.services.video_splitter import split_video
 from app.workers.parallel_processor import process_chunks_in_parallel
 from app.services.chunk_assembler import assemble_chunks
 from app.services.quality_metrics import QualityMetrics
 from app.services.assembly_verifier import verify_assembly
-from app.websocket_manager import ws_manager
 import os
+import redis
+import json
 from app.metrics import (
     record_job_started,
     record_job_complete,
@@ -49,8 +51,12 @@ async def transcode_video_chunked(video_id: int, quality: str, num_chunks: int =
     job = None
     
     async def update(message: dict):
-        """Shortcut to send WebSocket message."""
-        await ws_manager.send_progress(video_id, message)
+        """Send progress via Redis pub/sub so the FastAPI listener can forward to WebSocket."""
+        try:
+            r = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+            r.publish(f'progress_{video_id}', json.dumps(message))
+        except Exception as e:
+            print(f"⚠️  Progress update failed: {e}")
         
     try:
         print(f"\n{'='*60}")
@@ -165,14 +171,15 @@ async def transcode_video_chunked(video_id: int, quality: str, num_chunks: int =
         quality_result = qm.run_quality_check(str(original_path), final_path, include_vmaf=True)
         
         # Send quality metrics to frontend dashboard
+        vmaf_score = quality_result.get('vmaf')
         await update({
             "type": "quality_result",
             "psnr": quality_result['psnr'],
             "ssim": quality_result['ssim'],
-            "vmaf": quality_result.get('vmaf'),  # ← ADD THIS
+            "vmaf": vmaf_score,
             "psnr_ok": quality_result['psnr_ok'],
             "ssim_ok": quality_result['ssim_ok'],
-            "vmaf_ok": quality_result.get('vmaf', 0) >= 70,  # ← ADD THIS
+            "vmaf_ok": (vmaf_score or 0) >= 70,
             "overall_pass": quality_result['overall_pass'],
             "status": (
                 f"📊 Quality — PSNR: {quality_result['psnr']:.1f}dB, "
@@ -227,6 +234,52 @@ async def transcode_video_chunked(video_id: int, quality: str, num_chunks: int =
             "status": f"🎉 {quality} complete! ({job.processing_time:.1f}s total)"
         })
         
+        # Check if ALL qualities for this video are now complete
+        try:
+            all_jobs = db.query(TranscodingJob).filter(
+                TranscodingJob.video_id == video_id
+            ).all()
+            
+            completed_count = sum(1 for j in all_jobs if j.status == 'completed')
+            total_count = len(all_jobs)
+            
+            if completed_count == total_count and total_count > 0:
+                # All qualities done — send completion email
+                user = db.query(User).filter(User.id == video.user_id).first()
+                if user:
+                    transcoded = db.query(TranscodedVideo).filter(
+                        TranscodedVideo.original_video_id == video_id
+                    ).all()
+                    
+                    versions = [
+                        {
+                            "quality": t.quality,
+                            "file_size_mb": round((t.file_size or 0) / 1024 / 1024, 2),
+                            "similarity_score": round(t.fingerprint_similarity or 0, 1),
+                            "verification_passed": any(
+                                j.verification_passed for j in all_jobs if j.quality == t.quality
+                            )
+                        }
+                        for t in transcoded
+                    ]
+                    
+                    total_time = sum(j.processing_time or 0 for j in all_jobs)
+                    
+                    from app.services.email_service import notify_transcoding_complete
+                    notify_transcoding_complete(
+                        to_email=user.email,
+                        filename=video.filename,
+                        video_id=video_id,
+                        transcoded_versions=versions,
+                        total_time=total_time
+                    )
+                    
+                    # Update video status to completed
+                    video.status = VideoStatus.COMPLETED
+                    db.commit()
+        except Exception as e:
+            print(f"⚠️  Completion email failed (non-fatal): {e}")
+        
         return {"success": True, "job_id": job.id, "quality": quality}
     
     
@@ -248,6 +301,22 @@ async def transcode_video_chunked(video_id: int, quality: str, num_chunks: int =
             job.status = 'failed'
             job.error_message = str(e)
             db.commit()
+        
+        # Send failure email notification
+        try:
+            if video is not None:
+                user = db.query(User).filter(User.id == video.user_id).first()
+                if user:
+                    from app.services.email_service import notify_transcoding_failed
+                    notify_transcoding_failed(
+                        to_email=user.email,
+                        filename=video.filename,
+                        video_id=video_id,
+                        quality=quality,
+                        error=str(e)
+                    )
+        except Exception as email_err:
+            print(f"⚠️  Failure email failed (non-fatal): {email_err}")
             
         return {"success": False, "error": str(e)}
     

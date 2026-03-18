@@ -1,18 +1,27 @@
 {
   "title": "Video Transcoding Pipeline",
   "uid": "video-transcoding",
-  "version": 1,
+  "version": 2,
   "schemaVersion": 38,
   "refresh": "30s",
   "panels": [
     {
-      "title": "Jobs Completed (Total)",
+      "title": "Videos uploaded",
       "type": "stat",
       "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
-      "targets": [{
-        "expr": "sum(transcoding_jobs_total{status='completed'})",
-        "legendFormat": "Completed"
-      }],
+      "targets": [{"expr": "sum(videos_uploaded_total)", "legendFormat": "Uploaded"}],
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "fixed", "fixedColor": "purple"},
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "title": "Jobs completed",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "targets": [{"expr": "sum(transcoding_jobs_total{status='completed'})", "legendFormat": "Completed"}],
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "fixed", "fixedColor": "green"},
@@ -21,13 +30,10 @@
       }
     },
     {
-      "title": "Jobs Failed (Total)",
+      "title": "Jobs failed",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
-      "targets": [{
-        "expr": "sum(transcoding_jobs_total{status='failed'})",
-        "legendFormat": "Failed"
-      }],
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "targets": [{"expr": "sum(transcoding_jobs_total{status='failed'})", "legendFormat": "Failed"}],
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "fixed", "fixedColor": "red"},
@@ -36,16 +42,26 @@
       }
     },
     {
-      "title": "Queue Depth (Current)",
+      "title": "Emails sent",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
-      "targets": [{
-        "expr": "transcoding_queue_depth",
-        "legendFormat": "Queued"
-      }],
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "targets": [{"expr": "sum(emails_sent_total)", "legendFormat": "Emails"}],
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "thresholds"},
+          "color": {"mode": "fixed", "fixedColor": "orange"},
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "title": "Queue depth",
+      "type": "gauge",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 4},
+      "targets": [{"expr": "transcoding_queue_depth", "legendFormat": "Queued"}],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 50,
           "thresholds": {
             "steps": [
               {"color": "green", "value": 0},
@@ -57,13 +73,10 @@
       }
     },
     {
-      "title": "Active Workers",
+      "title": "Active workers",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
-      "targets": [{
-        "expr": "active_workers",
-        "legendFormat": "Workers"
-      }],
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 4},
+      "targets": [{"expr": "active_workers", "legendFormat": "Workers"}],
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "fixed", "fixedColor": "blue"}
@@ -71,25 +84,49 @@
       }
     },
     {
-      "title": "Jobs Per Minute (Rate)",
+      "title": "Jobs in progress",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 4},
+      "targets": [{"expr": "jobs_in_progress", "legendFormat": "In Progress"}],
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "steps": [
+              {"color": "green", "value": 0},
+              {"color": "yellow", "value": 3},
+              {"color": "red", "value": 8}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Backend memory usage",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 4},
+      "targets": [{"expr": "process_resident_memory_bytes", "legendFormat": "RSS"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {"mode": "fixed", "fixedColor": "purple"}
+        }
+      }
+    },
+    {
+      "title": "Jobs per minute",
       "type": "timeseries",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
-      "targets": [{
-        "expr": "rate(transcoding_jobs_total[5m]) * 60",
-        "legendFormat": "{{quality}} - {{status}}"
-      }],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 9},
+      "targets": [{"expr": "rate(transcoding_jobs_total[5m]) * 60", "legendFormat": "{{quality}} - {{status}}"}],
       "fieldConfig": {
         "defaults": {"unit": "short"}
       }
     },
     {
-      "title": "Job Duration (p95)",
+      "title": "Job duration (p95)",
       "type": "timeseries",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
-      "targets": [{
-        "expr": "histogram_quantile(0.95, rate(transcoding_job_duration_seconds_bucket[5m]))",
-        "legendFormat": "p95 duration - {{quality}}"
-      }],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 9},
+      "targets": [{"expr": "histogram_quantile(0.95, rate(transcoding_job_duration_seconds_bucket[5m]))", "legendFormat": "p95 - {{quality}}"}],
       "fieldConfig": {
         "defaults": {"unit": "s"}
       }

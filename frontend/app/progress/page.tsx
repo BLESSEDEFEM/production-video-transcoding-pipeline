@@ -96,7 +96,7 @@ function ProgressContent() {
     const handleMessage = (data: ProgressMessage) => {
         addMessage(data.status);
 
-        if (data.type === 'completed' && data.quality) {
+        if ((data.type === 'completed' || data.type === 'job_complete') && data.quality) {
             setCompletedQualities(prev => new Set([...prev, data.quality!]));
         }
     };

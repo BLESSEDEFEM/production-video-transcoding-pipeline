@@ -1,14 +1,31 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Home, Video, LogOut } from 'lucide-react';
+import { Home, Video, LogOut, Activity } from 'lucide-react';
+import axios from 'axios';
 
 export default function Navbar() {
   const router = useRouter();
+  const [isAdmin, setIsAdmin] = useState(false);
 
-  // ═══════════════════════════════════════════════════════════
-  // NEW FEATURE 4: Logout function
-  // ═══════════════════════════════════════════════════════════
+  useEffect(() => {
+    const checkAdmin = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+        
+        const response = await axios.get('http://localhost:8000/api/auth/me', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setIsAdmin(response.data.is_admin || false);
+      } catch {
+        // Not logged in or token expired — ignore
+      }
+    };
+    checkAdmin();
+  }, []);
+
   const handleLogout = () => {
     localStorage.removeItem('token');
     router.push('/login');
@@ -30,9 +47,6 @@ export default function Navbar() {
           {/* Right side - Navigation buttons */}
           <div className="flex items-center gap-4">
             
-            {/* ═══════════════════════════════════════════════════════════
-                NEW FEATURE 9: Home button (returns to upload page)
-                ═══════════════════════════════════════════════════════════ */}
             <button
               onClick={() => router.push('/upload')}
               className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -41,9 +55,6 @@ export default function Navbar() {
               <span className="font-semibold">Home</span>
             </button>
 
-            {/* ═══════════════════════════════════════════════════════════
-                NEW FEATURE 5: My Videos button
-                ═══════════════════════════════════════════════════════════ */}
             <button
               onClick={() => router.push('/videos')}
               className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -52,9 +63,17 @@ export default function Navbar() {
               <span className="font-semibold">My Videos</span>
             </button>
 
-            {/* ═══════════════════════════════════════════════════════════
-                NEW FEATURE 4: Logout button
-                ═══════════════════════════════════════════════════════════ */}
+            {/* Admin button - only visible to admin users */}
+            {isAdmin && (
+              <button
+                onClick={() => router.push('/admin')}
+                className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+              >
+                <Activity className="w-5 h-5" />
+                <span className="font-semibold">Admin</span>
+              </button>
+            )}
+
             <button
               onClick={handleLogout}
               className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white hover:bg-red-600 rounded-lg transition-colors font-semibold"

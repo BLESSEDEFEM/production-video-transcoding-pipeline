@@ -110,6 +110,9 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(videos.router)
 
+from app.api.admin import router as admin_router
+app.include_router(admin_router)
+
 # Directories
 UPLOAD_DIR = Path("storage/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
