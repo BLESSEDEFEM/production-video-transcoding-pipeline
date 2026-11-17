@@ -302,7 +302,7 @@ def _run_ffmpeg_transcode(input_path: str, output_path: str, quality: str) -> bo
     cmd = [
         'ffmpeg',
         '-i', input_path,
-        '-vf', f"scale={preset['resolution']}:force_original_aspect_ratio=decrease",
+        '-vf', f"scale={preset['resolution']}:force_original_aspect_ratio=decrease:force_divisible_by=2",
         '-c:v', 'libx264',
         '-b:v', preset['bitrate'],
         '-preset', 'medium',
