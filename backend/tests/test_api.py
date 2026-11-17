@@ -123,6 +123,30 @@ def test_user(db_session):
 
 
 @pytest.fixture
+def admin_user(db_session):
+    """Create an admin user (is_admin=True) and return their info + auth token."""
+    user = User(
+        username="adminuser",
+        email="admin@example.com",
+        hashed_password=hash_password("adminpass123"),
+        is_admin=True
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    token = create_access_token(
+        data={"user_id": user.id, "username": user.username}
+    )
+
+    return {
+        "user": user,
+        "token": token,
+        "headers": {"Authorization": f"Bearer {token}"}
+    }
+
+
+@pytest.fixture
 def test_video(db_session, test_user):
     """Create a test video record in the database."""
     video = Video(
@@ -389,15 +413,15 @@ class TestVideoEndpoints:
 class TestAdminEndpoints:
     """Test admin dashboard API endpoints."""
 
-    def test_admin_stats(self, client, test_user, test_video, test_jobs):
+    def test_admin_stats(self, client, test_user, admin_user, test_video, test_jobs):
         """GET /api/admin/stats should return system statistics."""
         response = client.get(
             "/api/admin/stats",
-            headers=test_user["headers"]
+            headers=admin_user["headers"]
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["users"]["total"] == 1
+        assert data["users"]["total"] == 2
         assert data["videos"]["total"] == 1
         assert data["jobs"]["total"] == 2
         assert data["jobs"]["completed"] == 2
@@ -408,22 +432,22 @@ class TestAdminEndpoints:
         response = client.get("/api/admin/stats")
         assert response.status_code == 401
 
-    def test_admin_videos(self, client, test_user, test_video):
+    def test_admin_videos(self, client, test_user, admin_user, test_video):
         """GET /api/admin/videos should list all videos."""
         response = client.get(
             "/api/admin/videos",
-            headers=test_user["headers"]
+            headers=admin_user["headers"]
         )
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 1
         assert data["videos"][0]["owner"] == "testuser"
 
-    def test_admin_videos_filter(self, client, test_user, test_video):
+    def test_admin_videos_filter(self, client, test_user, admin_user, test_video):
         """Filter videos by status should work."""
         response = client.get(
             "/api/admin/videos?status=approved",
-            headers=test_user["headers"]
+            headers=admin_user["headers"]
         )
         assert response.status_code == 200
         assert response.json()["total"] == 1
@@ -431,27 +455,33 @@ class TestAdminEndpoints:
         # Filter by a status that doesn't match
         response = client.get(
             "/api/admin/videos?status=rejected",
-            headers=test_user["headers"]
+            headers=admin_user["headers"]
         )
         assert response.status_code == 200
         assert response.json()["total"] == 0
 
-    def test_admin_jobs(self, client, test_user, test_video, test_jobs):
+    def test_admin_jobs(self, client, test_user, admin_user, test_video, test_jobs):
         """GET /api/admin/jobs should list all jobs."""
         response = client.get(
             "/api/admin/jobs",
-            headers=test_user["headers"]
+            headers=admin_user["headers"]
         )
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 2
 
-    def test_admin_jobs_filter_quality(self, client, test_user, test_video, test_jobs):
+    def test_admin_jobs_filter_quality(self, client, test_user, admin_user, test_video, test_jobs):
         """Filter jobs by quality should work."""
         response = client.get(
             "/api/admin/jobs?quality=360p",
-            headers=test_user["headers"]
+            headers=admin_user["headers"]
         )
         assert response.status_code == 200
         assert response.json()["total"] == 1
         assert response.json()["jobs"][0]["quality"] == "360p"
+        
+    
+    def test_admin_stats_non_admin_forbidden(self, client, test_user):
+        """A logged-in non-admin must get 403."""
+        response = client.get("/api/admin/stats", headers=test_user["headers"])
+        assert response.status_code == 403
