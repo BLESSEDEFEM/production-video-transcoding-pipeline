@@ -1,30 +1,29 @@
-Distributed Video Transcoding Pipeline
+# Video Transcoding Pipeline
 
-A distributed video transcoding system that splits videos into chunks, transcodes them in parallel across multiple workers, verifies output quality using industry-standard metrics (PSNR, SSIM, VMAF), and reassembles the final output — with real-time progress tracking via WebSocket.
+A queue-based video transcoding system that splits videos into chunks, transcodes them with FFmpeg in background workers, scores output quality with PSNR and SSIM, and reassembles the final output — with real-time progress tracking via WebSocket.
 
-Built with FastAPI, Next.js, FFmpeg, Redis (RQ), PostgreSQL, MinIO, and Docker. Includes Prometheus + Grafana monitoring and Kubernetes deployment manifests.
+Built with FastAPI, Next.js, FFmpeg, Redis (RQ), PostgreSQL, MinIO, and Docker. Includes Prometheus + Grafana monitoring. Kubernetes manifests are included but experimental (not run in production).
 
+## How It Works
 
-How It Works
-
+```
 Upload → Validate → Fingerprint → Split → Transcode (parallel) → Verify → Assemble → Notify
+```
 
+1. **Upload** — User uploads a video via the Next.js frontend
+2. **Validation** — Backend inspects the file: codec, resolution, bitrate, black frame detection, frozen frame detection
+3. **Fingerprinting** — Perceptual hash generated for duplicate detection and integrity verification
+4. **Approval/Rejection** — Video passes validation (queued) or is rejected with specific reasons
+5. **Queue** — Approved videos enter the Redis queue with one job per target quality (360p, 480p, 720p, 1080p)
+6. **Chunked Split** — Worker downloads the original from MinIO and splits it into N equal-duration segments via FFmpeg
+7. **Parallel Transcode** — Chunks are transcoded concurrently using a thread pool
+8. **Per-Chunk Verification** — Each chunk is checked for frame count and duration
+9. **Assembly** — Transcoded chunks are concatenated into the final video
+10. **Quality Metrics** — PSNR and SSIM scores are calculated against the original to verify output fidelity
+11. **Notification** — User receives an HTML email when all quality variants are complete
 
-Upload — User uploads a video via the React frontend
-Validation — Backend inspects the file: codec, resolution, bitrate, black frame detection, frozen frame detection
-Fingerprinting — Perceptual hash generated for duplicate detection and integrity verification
-Approval/Rejection — Video passes validation (queued) or is rejected with specific reasons
-Queue — Approved videos enter the Redis queue with one job per target quality (360p, 480p, 720p, 1080p)
-Chunked Split — Worker downloads the original from MinIO, splits it into N equal-duration segments via FFmpeg
-Parallel Transcode — All chunks are transcoded simultaneously using a thread pool
-Per-Chunk Verification — Each chunk is verified for frame count accuracy and duration correctness
-Assembly — Transcoded chunks are concatenated into the final video
-Quality Metrics — PSNR, SSIM, and VMAF scores are calculated against the original to verify output fidelity
-Notification — User receives a styled HTML email when all quality variants are complete
+## Architecture
 
-
-
-Architecture
 ```
 ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
 │   Next.js   │────▶│   FastAPI    │────▶│ PostgreSQL  │
@@ -42,7 +41,7 @@ Architecture
                     │
             ┌───────┴────────┐
             │   RQ Workers   │
-            │   (1-N pods)   │
+            │   (1–N)        │
             │                │
             │ Split → Transcode → Verify → Assemble
             └────────────────┘
@@ -53,94 +52,130 @@ Architecture
     └──────────────┘     └─────────────┘
 ```
 
-Tech Stack
+## Tech Stack
 
-LayerTechnologyWhyAPIFastAPIAsync Python, WebSocket support, auto-generated API docsFrontendNext.js 16 + TypeScript + TailwindApp Router, server components, type safetyDatabasePostgreSQL + SQLAlchemy + AlembicRelational model for users, videos, jobs; migration supportQueueRedis + RQ (Redis Queue)Simple job queue with pub/sub for real-time progress updatesStorageMinIOS3-compatible object storage — same API as AWS S3, runs locallyTranscodingFFmpegIndustry standard for video processing, splitting, assembly, quality analysisMonitoringPrometheus + GrafanaCustom metrics: queue depth, worker count, job duration, memory usageInfrastructureDocker Compose (8 services) + Kubernetes manifestsSingle-command local setup; production-ready K8s configs with scaling
+| Layer | Technology | Why |
+|---|---|---|
+| API | FastAPI | Async Python, WebSocket support, auto-generated API docs |
+| Frontend | Next.js 16 + TypeScript + Tailwind | App Router, server components, type safety |
+| Database | PostgreSQL + SQLAlchemy + Alembic | Relational model for users, videos, jobs; migration support |
+| Queue | Redis + RQ (Redis Queue) | Simple job queue with pub/sub for real-time progress updates |
+| Storage | MinIO | S3-compatible object storage — same API as AWS S3, runs locally |
+| Transcoding | FFmpeg | Industry standard for video processing, splitting, assembly, quality analysis |
+| Monitoring | Prometheus + Grafana | Custom metrics: queue depth, worker count, job duration, memory usage |
+| Infrastructure | Docker Compose (8 services) + experimental Kubernetes manifests | Single-command local setup |
 
+## Key Technical Decisions
 
-Key Technical Decisions
+### Why chunked parallel processing instead of single-file transcoding?
 
-Why chunked parallel processing instead of single-file transcoding?
-A 10-minute video transcoded sequentially takes N minutes. Split into 10 chunks across 10 workers, it takes roughly N/10 minutes. The tradeoff is coordination complexity — chunk boundaries must align on keyframes, and assembly requires precise concatenation to avoid audio/video sync drift. I use FFmpeg's segment muxer with keyframe-aligned splitting to handle this.
+A 10-minute video transcoded sequentially takes N minutes. Split into 10 chunks across 10 workers, it should take roughly N/10 minutes (expected speed-up; not benchmarked yet). The trade-off is coordination complexity: chunk boundaries must align on keyframes, and assembly needs precise concatenation to avoid audio/video sync drift. FFmpeg's segment muxer with keyframe-aligned splitting handles this. Known issue: assembly currently adds a few frames at chunk boundaries (see [Known Issues](#known-issues)).
 
-Why three quality metrics (PSNR, SSIM, VMAF)?
-PSNR measures raw signal fidelity but doesn't correlate well with human perception. SSIM accounts for structural similarity. VMAF (Netflix's metric) is the most perceptually accurate but computationally expensive. Using all three provides a complete quality picture — if VMAF is high but PSNR is low, the transcode is perceptually good despite mathematical differences.
+### Why two quality metrics (PSNR, SSIM)?
 
-Why MinIO instead of direct filesystem storage?
-MinIO speaks the S3 API, so the code is directly portable to AWS S3 without changing a single line. It also handles concurrent reads/writes from multiple workers cleanly, which filesystem storage doesn't guarantee without locking.
+PSNR measures raw signal fidelity but doesn't match human perception well. SSIM accounts for structural similarity. VMAF (Netflix's perceptual metric) was planned, but the FFmpeg build used here doesn't include libvmaf, so it is not active.
 
-Why Redis for both queue and real-time updates?
-RQ (Redis Queue) handles job distribution to workers. Redis pub/sub pushes progress updates to the FastAPI WebSocket handler, which streams them to the browser. Using one system for both avoids adding a separate message broker (like RabbitMQ) and keeps the infrastructure simpler.
+### Why MinIO instead of direct filesystem storage?
 
-Why perceptual fingerprinting on upload?
-Perceptual hashing generates a content-based fingerprint that survives re-encoding. This enables duplicate detection (don't re-transcode the same video) and integrity verification (confirm the assembled output matches the original input).
+MinIO speaks the S3 API, so moving to AWS S3 is a configuration change rather than a code change. It also handles concurrent reads/writes from multiple workers cleanly, which filesystem storage doesn't guarantee without locking.
 
+### Why Redis for both queue and real-time updates?
 
-Monitoring
+RQ (Redis Queue) hands jobs to workers. Redis pub/sub pushes progress updates to the FastAPI WebSocket handler, which streams them to the browser. Using one system for both avoids adding a separate message broker (like RabbitMQ) and keeps the infrastructure simpler.
 
-Grafana dashboard (http://localhost:3001, login: admin / admin123) with 10 panels:
+### Why perceptual fingerprinting on upload?
 
+Perceptual hashing produces a content-based fingerprint that survives re-encoding. This enables duplicate detection (don't re-transcode the same video) and integrity checks on the assembled output.
 
-Videos uploaded, jobs completed, jobs failed, emails sent
-Queue depth gauge, active workers, jobs in progress
-Backend memory usage
-Jobs per minute rate
-Job duration (p95) histogram
+## Monitoring
 
+Grafana dashboard (http://localhost:3001, login: `admin` / `admin123` — local default only, change before any deployment) with 10 panels:
+
+- Videos uploaded, jobs completed, jobs failed, emails sent
+- Queue depth gauge, active workers, jobs in progress
+- Backend memory usage
+- Jobs per minute rate
+- Job duration (p95) histogram
 
 Custom Prometheus metrics:
 
+- `videos_uploaded_total` — upload counter by status
+- `transcoding_jobs_total` — job counter by quality and status
+- `transcoding_queue_depth` — current queue size
+- `active_workers` — number of RQ workers
+- `transcoding_job_duration_seconds` — job duration histogram
+- `emails_sent_total` — email counter by success/failure
 
-videos_uploaded_total — upload counter by status
-transcoding_jobs_total — job counter by quality and status
-transcoding_queue_depth — current queue size
-active_workers — number of RQ workers
-transcoding_job_duration_seconds — job duration histogram
-emails_sent_total — email counter by success/failure
+## API Reference
 
+### Authentication
 
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/api/auth/register` | Create new user |
+| POST | `/api/auth/login` | Login, returns JWT |
+| GET | `/api/auth/me` | Get current user |
 
-API Reference
+### Videos
 
-Authentication
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/api/upload` | Upload video file |
+| GET | `/api/videos/list` | List user's videos |
+| GET | `/api/videos/{id}/inspection` | Validation report |
+| GET | `/api/videos/{id}/summary` | Transcoding summary |
+| GET | `/api/videos/{id}/download/{quality}` | Download transcoded video |
+| POST | `/api/videos/{id}/cancel` | Cancel transcoding |
+| DELETE | `/api/videos/{id}` | Delete video and all versions |
 
-MethodEndpointDescriptionPOST/api/auth/registerCreate new userPOST/api/auth/loginLogin, returns JWTGET/api/auth/meGet current user
+### Admin (admin users only — others get 403)
 
-Videos
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/admin/stats` | System statistics |
+| GET | `/api/admin/videos` | All videos (filterable) |
+| GET | `/api/admin/jobs` | All jobs (filterable) |
+| GET | `/api/admin/health` | Service health check |
 
-MethodEndpointDescriptionPOST/api/uploadUpload video fileGET/api/videos/listList user's videosGET/api/videos/{id}/inspectionValidation reportGET/api/videos/{id}/summaryTranscoding summaryGET/api/videos/{id}/download/{quality}Download transcoded videoPOST/api/videos/{id}/cancelCancel transcodingDELETE/api/videos/{id}Delete video and all versions
+### System
 
-Admin
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/health` | Health check |
+| GET | `/metrics` | Prometheus metrics |
+| WS | `/ws/progress/{video_id}` | Real-time progress |
 
-MethodEndpointDescriptionGET/api/admin/statsSystem statisticsGET/api/admin/videosAll videos (filterable)GET/api/admin/jobsAll jobs (filterable)GET/api/admin/healthService health check
+## Getting Started
 
-System
+### Prerequisites
 
-MethodEndpointDescriptionGET/healthKubernetes health probeGET/metricsPrometheus metricsWS/ws/progress/{video_id}Real-time progress
+- Docker & Docker Compose
+- (Optional, for local dev) Python 3.11+, Node.js 18+, FFmpeg
 
+### Run with Docker Compose
 
-Getting Started
-
-Prerequisites
-
-
-Docker & Docker Compose
-(Optional for local dev) Python 3.11+, Node.js 18+, FFmpeg
-
-
-Run with Docker Compose
-
-bashgit clone https://github.com/BLESSEDEFEM/video-transcoding-pipeline.git
-cd video-transcoding-pipeline
-docker compose up -d
+```bash
+git clone https://github.com/BLESSEDEFEM/production-video-transcoding-pipeline.git
+cd production-video-transcoding-pipeline
+docker compose up -d --build
+```
 
 This starts all 8 services:
 
-ServiceURLPurposeFrontendhttp://localhost:3000React UIBackendhttp://localhost:8000FastAPI APIGrafanahttp://localhost:3001MonitoringPrometheushttp://localhost:9090MetricsMinIOhttp://localhost:9001Storage consolePostgreSQLlocalhost:5432DatabaseRedislocalhost:6379Queue & pub/sub
+| Service | URL | Purpose |
+|---|---|---|
+| Frontend | http://localhost:3000 | Next.js UI |
+| Backend | http://localhost:8000 | FastAPI API |
+| Grafana | http://localhost:3001 | Monitoring |
+| Prometheus | http://localhost:9090 | Metrics |
+| MinIO | http://localhost:9001 | Storage console |
+| PostgreSQL | localhost:5432 | Database |
+| Redis | localhost:6379 | Queue & pub/sub |
 
-Run Locally (Development)
+### Run Locally (Development)
 
-bash# Backend
+```bash
+# Backend
 cd backend
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
@@ -155,10 +190,12 @@ python start_worker.py
 cd frontend
 npm install
 npm run dev
+```
 
-Kubernetes Deployment
+### Kubernetes Deployment (experimental — manifests not run in production)
 
-bashkubectl apply -f k8s/namespace.yaml
+```bash
+kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/secrets.yaml
 kubectl apply -f k8s/configmap.yaml
 kubectl apply -f k8s/postgres.yaml
@@ -166,22 +203,37 @@ kubectl apply -f k8s/redis.yaml
 kubectl apply -f k8s/backend.yaml
 kubectl apply -f k8s/worker.yaml
 
-# Scale workers based on load
+# Scale workers
 kubectl scale deployment transcoding-worker -n video-app --replicas=8
-
-
-Tests
-
-bashcd backend
-pip install pytest httpx
-python -m pytest tests/test_api.py -v
-
-24 tests covering: health endpoints, user auth, video upload/inspection/summary/cancellation, admin dashboard with filtering, and monitoring endpoints.
-
-
-Project Structure
 ```
-video-transcoding-pipeline/
+
+## Deployment History
+
+Ran on a single AWS EC2 instance (free tier) with Docker Compose for about 6 months; that instance is now decommissioned. It currently runs locally with `docker compose up -d --build`.
+
+## Tests
+
+```bash
+cd backend
+pip install pytest httpx==0.27.2
+python -m pytest tests/test_api.py -v
+```
+
+25 tests covering: health endpoints, user auth, video upload/inspection/summary/cancellation, admin dashboard with filtering, admin-only access (non-admins get 403), and monitoring endpoints.
+
+## Known Issues
+
+- Chunk assembly can add a few frames at chunk boundaries, which lowers PSNR.
+- A failed transcoding job returns an error instead of raising it, so RQ marks it successful and doesn't retry.
+- The UI can show "Transcoding Complete" while some quality jobs are still running or have failed.
+- The progress page doesn't show a message when a video is rejected.
+- Each quality level re-downloads and re-splits the original (planned: split once, fan out).
+- Several files in `tests/` are manual scripts, not pytest tests; the real suite is `tests/test_api.py`.
+
+## Project Structure
+
+```
+production-video-transcoding-pipeline/
 ├── backend/
 │   ├── app/
 │   │   ├── api/            # API endpoints (auth, videos, admin)
@@ -192,7 +244,7 @@ video-transcoding-pipeline/
 │   │   ├── queue/          # Redis queue configuration
 │   │   ├── main.py         # FastAPI entry point
 │   │   └── metrics.py      # Prometheus metric definitions
-│   ├── tests/              # 24 automated tests
+│   ├── tests/              # API test suite (test_api.py) + manual scripts
 │   ├── Dockerfile
 │   ├── Dockerfile.worker
 │   └── requirements.txt
@@ -201,13 +253,13 @@ video-transcoding-pipeline/
 │   ├── components/         # Shared React components
 │   ├── Dockerfile
 │   └── package.json
-├── k8s/                    # Kubernetes deployment manifests
+├── k8s/                    # Kubernetes manifests (experimental)
 ├── monitoring/
 │   ├── prometheus.yml      # Scrape config
 │   └── grafana/            # Dashboard provisioning
 └── docker-compose.yml      # 8-service orchestration
 ```
 
-License
+## License
 
 MIT
